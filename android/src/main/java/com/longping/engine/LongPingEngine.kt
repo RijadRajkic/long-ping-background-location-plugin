@@ -57,6 +57,7 @@ class LongPingEngine private constructor(context: Context) {
         private const val PRUNE_EVERY_TICKS = 60
         private const val DAY_MS = 86_400_000L
         private const val SERVICE_START_PENDING_MS = 15_000L
+        private const val AVAILABILITY_GRACE_MS = 10_000L
 
         // Holds only the application context, which lives as long as the process.
         @SuppressLint("StaticFieldLeak")
@@ -108,6 +109,8 @@ class LongPingEngine private constructor(context: Context) {
     private var lastLocationDirty = false
     private var lastNotificationAt = 0L
     private var locationAvailable: Boolean? = null
+    private var unavailableSinceMs = 0L
+    private var unavailabilityLogged = false
     private var serviceRequestedAt = 0L
     private var watchdogTicks = 0
 
@@ -125,6 +128,14 @@ class LongPingEngine private constructor(context: Context) {
                 log.error(TAG, "watchdog tick failed", e)
             }
             if (service != null) handler.postDelayed(this, WATCHDOG_MS)
+        }
+    }
+
+    /** Posted when the fused provider reports "unavailable"; cancelled if it recovers within the grace. */
+    private val availabilityLost = Runnable {
+        if (locationAvailable == false && service != null) {
+            unavailabilityLogged = true
+            log.warn(TAG, "location unavailable for ${(clock.nowMs() - unavailableSinceMs) / 1000} s (no provider can produce a fix right now)")
         }
     }
 
@@ -189,13 +200,20 @@ class LongPingEngine private constructor(context: Context) {
 
     internal fun changePace(isMoving: Boolean, cb: (Result<JSONObject>) -> Unit) = exec(cb) {
         if (!state.enabled) throw LongPingException(ErrorCode.NOT_ENABLED, "tracking is stopped; call start() first")
-        detector.force(isMoving, lastFix?.toPoint())
+        val now = clock.nowMs()
+        // Only a fresh, accurate fix may stand for "here, now"; see RecordingGate.forcedMotionFix.
+        val here = RecordingGate.forcedMotionFix(lastFix, now, config.minAccuracyM)
+        detector.force(isMoving, here?.toPoint())
         state = state.withMotion(detector.state)
         persistState(durable = false, force = true)
-        gate.requestMotionChange(clock.nowMs())
         log.info(TAG, "changePace: now ${motionWord(isMoving)}")
         reevaluateRequest("changePace")
-        service?.requestImmediateFix(config.accuracy)
+        if (here != null) {
+            onRecordDecision(gate.recordMotionChange(here))
+        } else {
+            gate.requestMotionChange(now)
+            service?.requestImmediateFix(config.accuracy)
+        }
         stateJson()
     }
 
@@ -314,6 +332,7 @@ class LongPingEngine private constructor(context: Context) {
                 batteryState = battery.current()
                 battery.start(handler) { guard("battery change") { onBatteryChanged(it) } }
                 activeSpec = null
+                resetAvailability()
                 gate.beginWindow(clock.nowMs())
                 handler.removeCallbacks(watchdog)
                 handler.postDelayed(watchdog, WATCHDOG_MS)
@@ -332,6 +351,7 @@ class LongPingEngine private constructor(context: Context) {
             activeSpec = null
             battery.stop()
             handler.removeCallbacks(watchdog)
+            resetAvailability()
             if (state.enabled) {
                 log.warn(TAG, "location service destroyed while tracking is enabled; the watchdog will restart it")
                 WatchdogWork.ensureScheduled(app, log)
@@ -367,11 +387,31 @@ class LongPingEngine private constructor(context: Context) {
         }
     }
 
-    /** Called on the engine looper by the fused callback. */
+    /**
+     * Called on the engine looper by the fused callback. The fused provider can report
+     * "unavailable" for a few milliseconds around every delivery (seen on every fix in the Android
+     * e2e run), so only an outage that lasts longer than [availabilityGraceMs] is logged; the
+     * matching "available again" line is written only after such a warning.
+     */
     internal fun onLocationAvailability(available: Boolean) {
         if (locationAvailable == available) return
         locationAvailable = available
-        if (available) log.info(TAG, "location available") else log.warn(TAG, "location unavailable (no provider can produce a fix right now)")
+        handler.removeCallbacks(availabilityLost)
+        if (!available) {
+            unavailableSinceMs = clock.nowMs()
+            handler.postDelayed(availabilityLost, availabilityGraceMs())
+        } else if (unavailabilityLogged) {
+            unavailabilityLogged = false
+            log.info(TAG, "location available again after ${(clock.nowMs() - unavailableSinceMs) / 1000} s")
+        }
+    }
+
+    private fun availabilityGraceMs() = maxOf(AVAILABILITY_GRACE_MS, currentIntervalMs())
+
+    private fun resetAvailability() {
+        handler.removeCallbacks(availabilityLost)
+        locationAvailable = null
+        unavailabilityLogged = false
     }
 
     /** Called on the engine looper with fixes from the continuous request or an immediate fix. */
@@ -487,6 +527,7 @@ class LongPingEngine private constructor(context: Context) {
         activeSpec = null
         battery.stop()
         handler.removeCallbacks(watchdog)
+        resetAvailability()
         svc.shutdown()
     }
 

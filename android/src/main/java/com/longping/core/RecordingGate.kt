@@ -50,6 +50,12 @@ class RecordingGate(lastRecordedTimeMs: Long? = null) {
         pendingMotionChangeSinceMs = null
     }
 
+    /**
+     * changePace() with a fix that stands for "here, now" (see [forcedMotionFix]): the motion
+     * change is recorded at once with it, like a detector transition.
+     */
+    fun recordMotionChange(fix: Fix): Decision.Record = record(fix, RecordEvent.MOTIONCHANGE, waived = false)
+
     fun offer(fix: Fix, nowMs: Long, intervalMs: Long, minAccuracyM: Double, motionChanged: Boolean = false): Decision {
         val accurate = isAccurate(fix, minAccuracyM)
         if (motionChanged) return record(fix, RecordEvent.MOTIONCHANGE, waived = !accurate)
@@ -104,6 +110,20 @@ class RecordingGate(lastRecordedTimeMs: Long? = null) {
     companion object {
         const val MOTIONCHANGE_GRACE_MS = 30_000L
         const val CLOCK_JUMP_MS = 10 * 60_000L
+
+        /** A last fix at most this old still stands for "here, now" when changePace() is called. */
+        const val FRESH_FIX_MS = 10_000L
+
+        /**
+         * changePace(): the last fix if it is fresh and accurate, else null. That fix is both the
+         * detector's new anchor / parked point and the motionchange record, written at once. With
+         * null the detector gets no point and the change waits for the next fix, which then
+         * becomes the point. A stale point must never be used: the first new fix would be judged
+         * against it (e.g. "parked" 30 s ago, now 15 m/s away) and undo the forced state before it
+         * was ever recorded, so the requested motionchange would be lost.
+         */
+        fun forcedMotionFix(lastFix: Fix?, nowMs: Long, minAccuracyM: Double): Fix? =
+            lastFix?.takeIf { nowMs - it.timeMs <= FRESH_FIX_MS && isAccurate(it, minAccuracyM) }
 
         fun isAccurate(fix: Fix, minAccuracyM: Double): Boolean =
             minAccuracyM == 0.0 || (fix.hasAccuracy && fix.accuracy <= minAccuracyM)
