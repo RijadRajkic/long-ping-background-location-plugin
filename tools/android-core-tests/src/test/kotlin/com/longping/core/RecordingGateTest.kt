@@ -119,6 +119,27 @@ class RecordingGateTest {
         assertEquals(1_800_000_000_000L, gate.lastRecordedTimeMs)
     }
 
+    @Test fun resumeTimeIsTheNewestStoredTimeButNeverLaterThanNow() {
+        val now = 100_000L
+        assertNull(RecordingGate.resumeTimeMs(null, null, null, now))
+        assertEquals(75_000L, RecordingGate.resumeTimeMs(60_000, 75_000, 70_000, now))
+        assertEquals(70_000L, RecordingGate.resumeTimeMs(60_000, null, 70_000, now))
+        assertEquals(80_000L, RecordingGate.resumeTimeMs(80_000, 75_000, null, now))
+        assertEquals(75_000L, RecordingGate.resumeTimeMs(null, 75_000, null, now))
+        // a clock set back must not hold new fixes
+        assertEquals(now, RecordingGate.resumeTimeMs(60_000, 500_000, null, now))
+    }
+
+    @Test fun seededClockHoldsTheFirstFixAfterARestart() {
+        // Android e2e S12: lastRecordedTime was persisted 25 s before the crash; the newest queued
+        // record is 3 s older than the first fix after the restart, so that fix is not due yet.
+        val gate = RecordingGate(lastRecordedTimeMs = 0)
+        gate.seed(RecordingGate.resumeTimeMs(0, 25_000, null, nowMs = 28_000))
+        assertEquals(25_000L, gate.lastRecordedTimeMs)
+        assertEquals(Decision.Skip(SkipReason.TOO_SOON), gate.offer(fix(timeMs = 28_000), 28_000, 10_000, minAcc))
+        gate.offer(fix(timeMs = 35_000), 35_000, 10_000, minAcc).recorded()
+    }
+
     @Test fun moreAccurateOrdering() {
         assertTrue(RecordingGate.moreAccurate(fix(accuracy = 5.0), fix(accuracy = 10.0)))
         assertFalse(RecordingGate.moreAccurate(fix(accuracy = -1.0), fix(accuracy = 1000.0)))

@@ -46,15 +46,15 @@ Error codes table.
 
 | method | does |
 |---|---|
-| `configure(config)` | Replace the whole config with defaults + `config`, validate, persist, apply live. Idempotent; safe every launch. Does not start or stop. Resolves State. |
-| `setConfig(partial)` | Deep-merge into the current config (objects merge, arrays/scalars replace), validate, persist, apply. Resolves State. |
+| `configure(config)` | Replace the app's config with defaults + `config`, validate, persist, apply live. The server's overrides stay on top (see Remote config). Idempotent; safe every launch. Does not start or stop. Resolves State. |
+| `setConfig(partial)` | Deep-merge into the app's config (objects merge, arrays/scalars replace), validate, persist, apply. The server's overrides stay on top. Resolves State. |
 | `start()` | Check permission; persist `enabled=true`; begin tracking; take an immediate `motionchange` fix (state = moving). Resolves State. Rejects `PERMISSION_DENIED`, `LOCATION_SERVICES_OFF` (still persists nothing in that case). |
 | `stop()` | Persist `enabled=false`; stop updates/service/regions. Queue is kept and still uploads. Resolves State. |
 | `getState()` | Resolves State. |
 | `setAuthorization(auth)` | Store `{accessToken, refreshToken?, refreshUrl?, refreshPayload?, refreshHeaders?}` in secure storage; clear `authorizationRequired`; trigger an upload. |
 | `clearAuthorization()` | Delete stored auth. |
 | `getCurrentPosition(opts)` | One fix. opts: `timeoutSec` (30), `maximumAgeSec` (0), `accuracy` (config accuracy), `persist` (false), `extras` ({}). With `persist` the fix is recorded with event `current` (and uploaded). Works while stopped (needs permission). On timeout resolves the best fix seen in the window if any, else the last known fix if younger than 10 min, else rejects `TIMEOUT`. |
-| `changePace(isMoving)` | Force moving/parked now; records a `motionchange` fix. Rejects `NOT_ENABLED` when stopped. |
+| `changePace(isMoving)` | Force moving/parked now; records a `motionchange` fix (which one: see Stop detection). Rejects `NOT_ENABLED` when stopped. |
 | `sync()` | Upload the queue now (ignores uploadIntervalSec and backoff). Resolves number of records uploaded. |
 | `getQueueCount()` | Records waiting. |
 | `clearQueue()` | Delete all queued records. |
@@ -100,7 +100,7 @@ http: {
 persistence: { maxRecords number [10000] clamp 1..1000000, maxDays number [7] clamp 1..365 }
 startOnBoot           boolean       [true]
 stopOnTerminate       boolean       [false]
-remoteConfig          boolean       [true]
+remoteConfig          boolean       [true]  apply the server's overrides (see Remote config); only the app sets it
 notification (Android): { title ['Location tracking'], text ['Sharing your location'], channelName ['Location tracking'], smallIcon [null → app icon; a drawable/mipmap resource name], priority ['low'|'default'|'high', 'low'] }
 ios: { showsBackgroundLocationIndicator [false], activityType ['automotive'|'otherNavigation'|'fitness'|'other', 'automotive'] }
 logLevel              'off'|'error'|'warn'|'info'|'debug'  ['info']
@@ -111,7 +111,33 @@ debug                 boolean       [false] Android: notification text shows las
 Unknown keys are ignored (logged at debug). A value of the wrong type rejects `INVALID_CONFIG` with the key
 in the message. `locationTemplate` is validated by rendering a sample record and JSON-parsing the result;
 failure rejects `INVALID_CONFIG`. Config is persisted as JSON (Android SharedPreferences `longping`,
-key `config`; iOS UserDefaults suite `com.longping`, key `config`). Auth secrets are never part of config.
+key `config`; iOS UserDefaults suite `com.longping`, key `config`). That is the app's layer; the server's overrides
+are stored apart (Android key `remote_overrides`, iOS key `remoteOverrides`). Auth secrets are never part of config.
+
+## Remote config (server overrides)
+
+The engine keeps two layers:
+
+- **App config**: the result of `configure()` / `setConfig()`.
+- **Server overrides**: every `long_ping.config` received, deep-merged into one object (the `setConfig` rules).
+
+**Effective config** = the overrides deep-merged onto the app config, validated together. It is what the engine
+runs and what `State.config` and `configchange` report.
+
+- `configure()` and `setConfig()` change only the app config and never clear the overrides: a key the server set
+  keeps the server's value until a reset. `setConfig` merges into the app config, not into the effective config.
+- A `long_ping.config` that does not validate on top of the current config is rejected whole (logged); the stored
+  overrides stay as they were.
+- When a new app config makes the stored overrides invalid (e.g. an override of `lowBattery.belowPct` after the app
+  dropped `lowBattery`), the app's call still succeeds: the overrides are cleared and the reason is logged as an
+  error. The app's own invalid input still rejects `INVALID_CONFIG`. Same at launch for stored overrides.
+- `{"long_ping": {"reset": true}}` clears all overrides. With `config` in the same reply, the reset runs first. A
+  reset is honoured even while `remoteConfig` is false.
+- `remoteConfig` is the app's switch. While it is false the overrides stay stored but are not applied, and a
+  `long_ping.config` that arrives is ignored (not stored). Turning it back on applies the stored overrides again.
+  A `remoteConfig` key from the server is dropped (logged at warn).
+- `configchange` is emitted, with the effective config, when a server reply changed the effective config. A reply
+  that changes nothing (the same config again) emits nothing and writes nothing.
 
 ## Effective interval
 
@@ -152,8 +178,13 @@ Parked state:
 - else if `distance(parkedAt, fix) > stopRadiusM` and `accuracy <= stopRadiusM` → **move**.
 - On move: state = moving, anchor = fix.
 
-`disableStopDetection` = never park. `changePace(true)` → moving, anchor = current fix (or null).
-`changePace(false)` → parked at last fix. Distance = haversine, earth radius 6371008.8 m.
+`disableStopDetection` = never park. Distance = haversine, earth radius 6371008.8 m.
+
+`changePace(true)` → moving, anchor = the point; `changePace(false)` → parked at the point. The point is the last
+fix only if it is fresh (`now - fix.time <= 10 s`) and accurate (`minAccuracyM`); it is then recorded at once as
+the `motionchange`. Otherwise the state is forced with no point, and the next fix becomes the point and is recorded
+as the `motionchange` (with the accuracy wait every requested motion change has). A point that is not recorded at
+once would judge the next fix and could undo the forced state before its `motionchange` exists.
 
 iOS extra: on park, monitor a circular region (center parkedAt, radius `max(100, stopRadiusM * 2)`,
 exit only); exit → move immediately. Remove the region on move/stop.
@@ -206,13 +237,15 @@ altitude battery_level battery_is_charging mock extras` (`extras` = JSON object 
 
 Response handling:
 - **2xx** → delete the sent records; reset backoff; parse the body as JSON if possible; if it has a
-  `long_ping` object: `config` (partial Config) is merged like `setConfig` when `remoteConfig` is true, then
-  `configchange` is emitted; `stop: true` stops tracking (emits `enabledchange`).
+  `long_ping` object: `reset: true` clears the server overrides, then `config` (partial Config) merges into them
+  (see Remote config); `stop: true` stops tracking (emits `enabledchange`).
 - **401 / 403** → if `refreshUrl` is stored: POST `refreshPayload` (default `{"refresh_token":"{{refreshToken}}"}`,
   `{{refreshToken}}` replaced) with `refreshHeaders`; read `access_token`|`accessToken` and optional
   `refresh_token`|`refreshToken` from the JSON reply; store; retry the batch once. Otherwise (no refresh URL,
   or refresh failed): `authorizationRequired = true`, emit `authorization` `{status, error}`, keep records,
-  pause uploads until `setAuthorization()` or 15 min pass. Location keeps running.
+  pause uploads until `setAuthorization()` or 15 min pass. Location keeps running. `error` is the same text on
+  both platforms: `HTTP <status>` (no refresh possible), `token refresh failed: HTTP <status>` or
+  `token refresh failed: <network error>`, `rejected after token refresh (HTTP <status>)`.
 - **413** → retry immediately with half the batch (min 1).
 - **408, 429, 5xx, network error, timeout** → keep records; backoff `min(900, 10 * 2^n)` s with ±20 % jitter;
   `Retry-After` (seconds) wins when present.
@@ -225,6 +258,11 @@ Hold a partial wake lock (Android, 60 s timeout) / background task (iOS) for the
 ## Lifecycle and recovery
 
 Persisted engine state: `enabled`, `isMoving`, `anchor`, `parkedAt`, `lastRecordedTime`, `lastFixTime`.
+
+Recording clock at engine start (process launch): `lastRecordedTime = min(now, max(persisted lastRecordedTime,
+newest queued record's recorded_at, persisted lastLocationAt))`. State is persisted at most every 15 s (iOS) /
+30 s (Android), so without the seed the first fix after a crash or kill could be recorded too early. The cap at
+`now` keeps a clock that was set back from holding every new fix.
 
 Watchdog (both, every 60 s while enabled): if `now - lastFixTime > max(2 × effectiveInterval, interval + 60 s)`,
 log it and restart location updates. Also runs upload triggers and log pruning.
@@ -281,7 +319,7 @@ log it and restart location updates. Also runs upload triggers and log pruning.
 
 AuthorizationStatus: `0 NOT_DETERMINED, 1 RESTRICTED, 2 DENIED, 3 ALWAYS, 4 WHEN_IN_USE`.
 
-State:
+State (`config` is the effective config: app config + server overrides):
 ```
 { enabled, isMoving, lastLocation: Location|null, lastLocationAt: ms|null, queueCount,
   authorizationRequired, config }
@@ -303,7 +341,7 @@ ProviderState:
 | `providerchange` | ProviderState |
 | `authorization` | `{ status, error }` (upload auth failed and could not refresh) |
 | `enabledchange` | `{ enabled }` |
-| `configchange` | Config (after a remote config was applied) |
+| `configchange` | effective Config (after a server reply's `config` / `reset` changed it) |
 | `error` | `{ code, message }` (location errors, start failures in the background) |
 
 ## Error codes
@@ -331,7 +369,8 @@ Decisions taken while building the engines; they extend the sections above.
   `sync()` and `setAuthorization()` bypass both backoff and the 15-minute auth pause; connectivity returning only
   skips backoff when the last failure was a network error.
 - Motion changes from `start()` / `changePace()` / region exit wait up to 30 s for an accurate fix, then record
-  the best one seen. `current` records never reset the interval clock.
+  the best one seen. `current` records never reset the interval clock while the engine runs (the seed at engine
+  start takes the newest stored record of any kind).
 - `getLog` returns the newest `limit` entries since `sinceMs`, in the requested order.
 - Unknown horizontal accuracy is `-1`.
 - Android: `POST_NOTIFICATIONS` is the app's to request; without it the tracking notification is hidden on 13+.
@@ -340,4 +379,12 @@ Decisions taken while building the engines; they extend the sections above.
 
 Known differences, acceptable for v0.1: iOS also accepts an HTTP-date `Retry-After`; `getCurrentPosition` resolves
 early at 20/100/1000 m (high/balanced/low) on iOS and at `minAccuracyM` on Android; engine state is persisted at
-most every 15 s (iOS) / 30 s (Android).
+most every 15 s (iOS) / 30 s (Android) (the recording clock is seeded at engine start; see Lifecycle and recovery).
+
+## Changes in v0.1.1 (both platforms)
+
+- Server overrides are their own layer and survive `configure()` until `long_ping.reset` (see Remote config).
+- The recording clock is seeded at engine start (see Lifecycle and recovery).
+- `changePace()` uses the last fix as its point only when it records it at once (see Stop detection). iOS used a
+  fresh but inaccurate fix as the point; Android was fixed in 3c3cbf2.
+- The `authorization` event's `error` text is the same on both platforms (see Upload → Response handling).

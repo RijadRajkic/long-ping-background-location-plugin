@@ -15,12 +15,15 @@ import androidx.core.content.ContextCompat
 import com.longping.core.AuthCredentials
 import com.longping.core.BatteryState
 import com.longping.core.Clock
+import com.longping.core.ConfigException
+import com.longping.core.ConfigLayers
 import com.longping.core.ConfigResolver
 import com.longping.core.CurrentPositionOptions
 import com.longping.core.EngineState
 import com.longping.core.ErrorCode
 import com.longping.core.Fix
 import com.longping.core.Intervals
+import com.longping.core.Iso8601
 import com.longping.core.LocationRecord
 import com.longping.core.LocationRequestSpec
 import com.longping.core.LogQuery
@@ -88,8 +91,18 @@ class LongPingEngine private constructor(context: Context) {
     private val network = NetworkMonitor(app, log) { uploader.trigger(UploadTrigger.CONNECTIVITY) }
     private val uploader: Uploader
 
+    /** The app's config and the server's overrides; [config] is the effective result. Engine thread only. */
+    private val layers: ConfigLayers
+    private val overridesDroppedAtLaunch: ConfigException?
+
+    init {
+        val restored = ConfigLayers.restore(ConfigResolver.restore(prefs.config), prefs.remoteOverrides)
+        layers = restored.layers
+        overridesDroppedAtLaunch = restored.droppedOverrides
+    }
+
     @Volatile
-    internal var config: LongPingConfig = ConfigResolver.restore(prefs.config)
+    internal var config: LongPingConfig = layers.effective
         private set
 
     @Volatile
@@ -148,6 +161,11 @@ class LongPingEngine private constructor(context: Context) {
         })
         post("engine init") {
             log.info(TAG, "engine started (enabled=${state.enabled}, queued=${countQueue()})")
+            overridesDroppedAtLaunch?.let {
+                prefs.saveRemoteOverrides(layers.overridesJson)
+                log.error(TAG, "server overrides cleared: they do not validate with the stored config (${it.message})")
+            }
+            seedRecordingClock()
             network.start()
             providers.start(handler)
             pruneStorage()
@@ -166,12 +184,12 @@ class LongPingEngine private constructor(context: Context) {
     }
 
     internal fun configure(input: JSONObject, cb: (Result<JSONObject>) -> Unit) = exec(cb) {
-        applyConfig(ConfigResolver.resolve(input), "configure")
+        applyLocalConfig(input, merge = false, source = "configure")
         stateJson()
     }
 
     internal fun setConfig(partial: JSONObject, cb: (Result<JSONObject>) -> Unit) = exec(cb) {
-        applyConfig(ConfigResolver.merge(config, partial), "setConfig")
+        applyLocalConfig(partial, merge = true, source = "setConfig")
         stateJson()
     }
 
@@ -646,33 +664,73 @@ class LongPingEngine private constructor(context: Context) {
         }
     }
 
-    private fun applyConfig(r: ConfigResolver.Resolution, source: String) {
+    /** configure() / setConfig() on the app's layer; the server's overrides stay on top. */
+    private fun applyLocalConfig(input: JSONObject, merge: Boolean, source: String) {
         val old = config
-        val next = r.config
-        config = next
-        prefs.saveConfig(next.toJson().toString())
-        log.level = next.logLevel
-        r.unknownKeys.forEach { log.debug(TAG, "$source: unknown key '$it' ignored") }
+        val change = layers.setLocal(input, merge)
+        prefs.saveConfig(layers.local.toJson().toString())
+        config = layers.effective
+        log.level = config.logLevel
+        change.unknownKeys.forEach { log.debug(TAG, "$source: unknown key '$it' ignored") }
         log.info(TAG, "$source applied")
+        change.droppedOverrides?.let {
+            prefs.saveRemoteOverrides(layers.overridesJson)
+            log.error(TAG, "server overrides cleared: they do not validate with this config (${it.message})")
+        }
+        applyLive(old, source)
+    }
+
+    private fun applyLive(old: LongPingConfig, source: String) {
+        val next = config
         if (old.notification != next.notification || old.debug != next.debug) refreshNotification(force = true)
         reevaluateRequest(source)
         if (old.http != next.http) uploader.trigger(UploadTrigger.WATCHDOG)
     }
 
+    /**
+     * A `long_ping` reply: reset clears the server's overrides, then config merges into them. Only
+     * a change of the effective config is applied live and emitted as `configchange`.
+     */
     private fun applyRemote(d: RemoteDirective) {
-        d.config?.let { partial ->
-            if (!config.remoteConfig) {
-                log.info(TAG, "server config ignored (remoteConfig is false)")
-            } else {
-                try {
-                    applyConfig(ConfigResolver.merge(config, partial), "server config")
-                    emit("configchange", config.toJson())
-                } catch (e: LongPingException) {
-                    log.warn(TAG, "server config rejected: ${e.message}")
-                }
+        if (d.config != null || d.reset) {
+            val old = config
+            val change = layers.applyRemote(d.config, d.reset)
+            if (d.reset) log.info(TAG, "server reset: overrides cleared")
+            if (change.ignored) log.info(TAG, "server config ignored (remoteConfig is false)")
+            if (change.remoteConfigKeyIgnored) log.warn(TAG, "server config: remoteConfig ignored (only the app sets it)")
+            change.rejected?.let { log.warn(TAG, "server config rejected: ${it.message}") }
+            change.unknownKeys.forEach { log.debug(TAG, "server config: unknown key '$it' ignored") }
+            if (change.overridesChanged) prefs.saveRemoteOverrides(layers.overridesJson)
+            if (change.effectiveChanged) {
+                config = layers.effective
+                log.level = config.logLevel
+                log.info(TAG, "server config applied")
+                applyLive(old, "server config")
+                emit("configchange", config.toJson())
+            } else if (d.config != null && !change.ignored && change.rejected == null) {
+                log.debug(TAG, "server config: no change")
             }
         }
         if (d.stop && state.enabled) stopTracking("server sent long_ping.stop")
+    }
+
+    /**
+     * lastRecordedTime is persisted at most every 30 s. After process death the newest queued
+     * record or the last location can be later; the gate starts from them so the first fix after a
+     * restart is not recorded too early.
+     */
+    private fun seedRecordingClock() {
+        val newestQueued = try {
+            queue.newestRecordedAt()
+        } catch (e: Exception) {
+            log.error(TAG, "queue unreadable", e)
+            null
+        }
+        val resumeAt = RecordingGate.resumeTimeMs(state.lastRecordedTimeMs, newestQueued, lastLocationAt, clock.nowMs())
+        if (resumeAt == state.lastRecordedTimeMs) return
+        gate.seed(resumeAt)
+        state = state.copy(lastRecordedTimeMs = resumeAt)
+        if (resumeAt != null) log.debug(TAG, "interval clock resumes from ${Iso8601.format(resumeAt)} (newest stored record or last location)")
     }
 
     private fun stateJson(): JSONObject = JSONObject()

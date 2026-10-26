@@ -15,7 +15,9 @@ final class Tracker: LocationControllerDelegate {
     private let location: LocationController
     private let permissions: PermissionFlow
 
-    private(set) var config: LongPingConfig
+    /// The app's config and the server's overrides; `config` is the effective result.
+    private var layers: ConfigLayers
+    var config: LongPingConfig { layers.effective }
     private var state: PersistedEngineState
     private var detector: StopDetector
     private var gate: RecordingGate
@@ -52,25 +54,39 @@ final class Tracker: LocationControllerDelegate {
         self.store = store
         self.uploader = uploader
 
-        var loadedConfig = LongPingConfig.defaults
+        var localConfig = LongPingConfig.defaults
         var configProblem: String?
         if let stored = preferences.loadConfigJSON() {
             do {
-                loadedConfig = try ConfigResolver.resolve(stored).config
+                localConfig = try ConfigResolver.resolve(stored).config
             } catch {
                 configProblem = "stored config unreadable (\(error)); using defaults"
             }
         }
-        config = loadedConfig
-        state = preferences.loadState()
-        detector = StopDetector(isMoving: state.isMoving, anchor: state.anchor, parkedAt: state.parkedAt)
-        gate = RecordingGate(lastRecordedTime: state.lastRecordedTime, armedAt: clock.nowMs)
-        logger.level = config.logLevel
-        if let configProblem { logger.error("config", configProblem) }
+        let restored = ConfigLayers.restore(local: localConfig, overrides: preferences.loadRemoteOverrides())
+        layers = restored.layers
+        let persisted = preferences.loadState()
+        state = persisted
+        detector = StopDetector(isMoving: persisted.isMoving, anchor: persisted.anchor, parkedAt: persisted.parkedAt)
+        let now = clock.nowMs
+        let resumeAt = RecordingGate.resumeTime(persisted: persisted.lastRecordedTime, newestQueued: store.newestQueuedRecordedAt(),
+                                                lastLocationAt: persisted.lastLocationAt, now: now)
+        gate = RecordingGate(lastRecordedTime: resumeAt, armedAt: now)
+        state.lastRecordedTime = resumeAt
 
         let location = LocationController(logger: logger)
         self.location = location
         permissions = PermissionFlow(location: location, logger: logger)
+
+        logger.level = config.logLevel
+        if let configProblem { logger.error("config", configProblem) }
+        if let dropped = restored.dropped {
+            preferences.saveRemoteOverrides(layers.overrides)
+            logger.error("config", "server overrides cleared: they do not validate with the stored config (\(dropped))")
+        }
+        if let resumeAt, resumeAt != persisted.lastRecordedTime {
+            logger.debug("location", "interval clock resumes from \(Timestamp.iso8601(resumeAt)) (newest stored record or last location)")
+        }
         location.delegate = self
         uploader.update(http: config.http)
 
@@ -130,21 +146,29 @@ final class Tracker: LocationControllerDelegate {
 
     // MARK: - Config
 
-    /// configure() (merge false: defaults + patch) and setConfig()/remote config (merge true).
+    /// configure() (merge false: defaults + patch) and setConfig() (merge true), on the app's layer. The server's
+    /// overrides stay on top.
     @discardableResult
     func applyConfig(_ patch: JSONValue, merge: Bool, source: String) throws -> LongPingConfig {
-        let resolution = try ConfigResolver.resolve(patch, onto: merge ? config.json : LongPingConfig.defaults.json)
         let previous = config
-        config = resolution.config
+        let change = try layers.setLocal(patch, merge: merge)
+        preferences.save(layers.local)
         logger.level = config.logLevel
-        preferences.save(config)
-        for note in resolution.notes {
-            logger.log(note.kind == .unknownKey ? .debug : .warn, "config", note.message)
-        }
+        log(change.notes)
         logger.info("config", "\(source) applied")
+        if let dropped = change.droppedOverrides {
+            preferences.saveRemoteOverrides(layers.overrides)
+            logger.error("config", "server overrides cleared: they do not validate with this config (\(dropped))")
+        }
         uploader.update(http: config.http)
         applyLive(previous: previous)
         return config
+    }
+
+    private func log(_ notes: [ConfigResolver.Note]) {
+        for note in notes {
+            logger.log(note.kind == .unknownKey ? .debug : .warn, "config", note.message)
+        }
     }
 
     private func applyLive(previous: LongPingConfig) {
@@ -214,16 +238,12 @@ final class Tracker: LocationControllerDelegate {
     func changePace(_ isMoving: Bool) throws {
         guard state.enabled else { throw LongPingError(.notEnabled, "tracking is not enabled; call start() first") }
         let now = clock.nowMs
-        let fresh = lastFix.flatMap { now - $0.time <= PendingMotionChange.freshnessMs ? $0 : nil }
-        if isMoving {
-            detector.forceMoving(at: fresh)
-        } else {
-            detector.forceParked(at: fresh)
-        }
+        // The point is the fix recorded as the motionchange right now, or none (StopDetector.changePace).
+        let here = detector.changePace(isMoving, lastFix: lastFix, now: now, minAccuracyM: config.minAccuracyM)
         syncDetectorState()
         logger.info("motion", "changePace(\(isMoving)): now \(isMoving ? "moving" : "parked")")
         reconcileRegion()
-        requestMotionChange()
+        recordMotionChange(here, requestedAt: now)
     }
 
     // MARK: - Tracking session
@@ -387,7 +407,13 @@ final class Tracker: LocationControllerDelegate {
     /// Motion change now if a fresh accurate fix is known, else when the next one arrives.
     private func requestMotionChange() {
         let now = clock.nowMs
-        if let fix = PendingMotionChange.immediateFix(lastFix: lastFix, now: now, minAccuracyM: config.minAccuracyM) {
+        recordMotionChange(PendingMotionChange.immediateFix(lastFix: lastFix, now: now, minAccuracyM: config.minAccuracyM),
+                           requestedAt: now)
+    }
+
+    /// Records `fix` as the motion change now, or (nil) waits for the next fix.
+    private func recordMotionChange(_ fix: Fix?, requestedAt now: EpochMs) {
+        if let fix {
             pendingMotion = nil
             record(fix, event: .motionchange)
         } else {
@@ -653,18 +679,26 @@ final class Tracker: LocationControllerDelegate {
         persistState(force: true)
     }
 
-    /// Server `long_ping` command from an upload response.
+    /// Server `long_ping` command from an upload response. `reset` clears the overrides, then `config` merges
+    /// into them; only a change of the effective config is applied live and emitted as `configchange`.
     func applyRemote(_ command: RemoteCommand) {
-        if let patch = command.config {
-            if config.remoteConfig {
-                do {
-                    try applyConfig(patch, merge: true, source: "remote config")
-                    events.emit(.configchange, config.json.dictionaryObject)
-                } catch {
-                    logger.error("config", "remote config rejected: \(error)")
-                }
-            } else {
-                logger.info("config", "remote config ignored (remoteConfig is false)")
+        if command.config != nil || command.reset {
+            let previous = config
+            let change = layers.applyRemote(config: command.config, reset: command.reset)
+            if command.reset { logger.info("config", "remote reset: server overrides cleared") }
+            if change.ignored { logger.info("config", "remote config ignored (remoteConfig is false)") }
+            if change.remoteConfigKeyIgnored { logger.warn("config", "remote config: remoteConfig ignored (only the app sets it)") }
+            if let rejected = change.rejected { logger.error("config", "remote config rejected: \(rejected)") }
+            log(change.notes)
+            if change.overridesChanged { preferences.saveRemoteOverrides(layers.overrides) }
+            if change.effectiveChanged {
+                logger.level = config.logLevel
+                logger.info("config", "remote config applied")
+                uploader.update(http: config.http)
+                applyLive(previous: previous)
+                events.emit(.configchange, config.json.dictionaryObject)
+            } else if command.config != nil, !change.ignored, change.rejected == nil {
+                logger.debug("config", "remote config: no change")
             }
         }
         if command.stop, state.enabled {

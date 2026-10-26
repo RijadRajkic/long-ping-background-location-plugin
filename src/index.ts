@@ -28,9 +28,12 @@ const listen =
     emitter.addListener(event, callback as (payload: any) => void);
 
 const LongPing = {
-  /** Replace the whole config (defaults + given). Safe on every launch: never starts, stops or prompts. */
+  /**
+   * Replace your app's config (defaults + given). Server overrides (`long_ping.config`) stay on top until
+   * `long_ping.reset`. Safe on every launch: never starts, stops or prompts.
+   */
   configure: (config: Config): Promise<State> => NativeLongPing.configure(config) as Promise<State>,
-  /** Merge into the current config and apply it live. */
+  /** Merge into your app's config and apply it live. Server overrides stay on top. */
   setConfig: (config: Config): Promise<State> => NativeLongPing.setConfig(config) as Promise<State>,
   /** Start tracking. Rejects PERMISSION_DENIED or LOCATION_SERVICES_OFF; never prompts. */
   start: (): Promise<State> => NativeLongPing.start() as Promise<State>,

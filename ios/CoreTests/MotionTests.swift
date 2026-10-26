@@ -232,6 +232,26 @@ final class RecordingGateTests: XCTestCase {
         XCTAssertEqual(gate.armedAt, at(40))
         XCTAssertEqual(gate.evaluate(fix(at: 41), now: at(41), intervalSec: 30, minAccuracyM: 100), .record(fix(at: 41), accuracyWaived: false))
     }
+
+    func testResumeTimeIsTheNewestStoredTimeButNeverLaterThanNow() {
+        let now = at(100)
+        XCTAssertNil(RecordingGate.resumeTime(persisted: nil, newestQueued: nil, lastLocationAt: nil, now: now))
+        XCTAssertEqual(RecordingGate.resumeTime(persisted: at(60), newestQueued: at(75), lastLocationAt: at(70), now: now), at(75))
+        XCTAssertEqual(RecordingGate.resumeTime(persisted: at(60), newestQueued: nil, lastLocationAt: at(70), now: now), at(70))
+        XCTAssertEqual(RecordingGate.resumeTime(persisted: at(80), newestQueued: at(75), lastLocationAt: nil, now: now), at(80))
+        XCTAssertEqual(RecordingGate.resumeTime(persisted: nil, newestQueued: at(75), lastLocationAt: nil, now: now), at(75))
+        XCTAssertEqual(RecordingGate.resumeTime(persisted: at(60), newestQueued: at(500), lastLocationAt: nil, now: now), now,
+                       "a clock set back must not hold new fixes as stale")
+    }
+
+    func testSeededClockHoldsTheFirstFixAfterARelaunch() {
+        // Android e2e S12: lastRecordedTime was persisted 25 s before the kill; the newest queued record is 3 s
+        // older than the first fix after the restart, so that fix is not due yet at a 10 s interval.
+        let seed = RecordingGate.resumeTime(persisted: fix(at: 0).time, newestQueued: fix(at: 25).time, lastLocationAt: nil, now: at(28))
+        var gate = RecordingGate(lastRecordedTime: seed, armedAt: at(28))
+        XCTAssertEqual(gate.evaluate(fix(at: 28), now: at(28), intervalSec: 10, minAccuracyM: 100), .tooSoon)
+        XCTAssertEqual(gate.evaluate(fix(at: 35), now: at(35), intervalSec: 10, minAccuracyM: 100), .record(fix(at: 35), accuracyWaived: false))
+    }
 }
 
 final class PendingMotionChangeTests: XCTestCase {

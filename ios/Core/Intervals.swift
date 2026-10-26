@@ -56,6 +56,14 @@ struct RecordingGate: Equatable {
         minAccuracyM == 0 || fix.accuracy <= minAccuracyM
     }
 
+    /// The interval clock when the engine starts. `lastRecordedTime` is persisted at most every 15 s, so after a
+    /// kill the newest queued record or the last location can be later; without them the first fix after a
+    /// relaunch could be recorded too early. Capped at `now`: a clock set back must not hold every new fix as stale.
+    static func resumeTime(persisted: EpochMs?, newestQueued: EpochMs?, lastLocationAt: EpochMs?, now: EpochMs) -> EpochMs? {
+        guard let newest = [persisted, newestQueued, lastLocationAt].compactMap({ $0 }).max() else { return nil }
+        return min(newest, now)
+    }
+
     mutating func evaluate(_ fix: Fix, now: EpochMs, intervalSec: Double, minAccuracyM: Double) -> Decision {
         if let last = lastRecordedTime {
             if fix.time < last { return .stale }

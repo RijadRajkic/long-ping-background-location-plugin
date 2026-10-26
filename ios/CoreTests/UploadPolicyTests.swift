@@ -196,6 +196,15 @@ final class RemoteCommandTests: XCTestCase {
         XCTAssertEqual(RemoteCommand.parse(Data("{\"long_ping\":{\"stop\":true}}".utf8)), RemoteCommand(config: nil, stop: true))
     }
 
+    func testParsesReset() {
+        XCTAssertEqual(RemoteCommand.parse(Data("{\"long_ping\":{\"reset\":true}}".utf8)),
+                       RemoteCommand(config: nil, stop: false, reset: true))
+        XCTAssertEqual(RemoteCommand.parse(Data("{\"long_ping\":{\"reset\":true,\"config\":{\"movingIntervalSec\":5}}}".utf8)),
+                       RemoteCommand(config: ["movingIntervalSec": 5], stop: false, reset: true))
+        XCTAssertNil(RemoteCommand.parse(Data("{\"long_ping\":{\"reset\":\"yes\"}}".utf8)))
+        XCTAssertEqual(RemoteCommand.parse(Data("{\"long_ping\":{\"stop\":true}}".utf8))?.reset, false)
+    }
+
     func testIgnoresAnythingElse() {
         XCTAssertNil(RemoteCommand.parse(Data("{\"long_ping\":{\"config\":5,\"stop\":\"yes\"}}".utf8)))
         XCTAssertNil(RemoteCommand.parse(Data("{\"long_ping\":true}".utf8)))

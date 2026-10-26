@@ -100,6 +100,15 @@ final class LocalStore {
         }
     }
 
+    /// `recorded_at` of the newest queued record, for the recording clock at engine start. Blocks until the io
+    /// queue runs it (its work is short sqlite and Keychain calls); never call it from the io queue.
+    func newestQueuedRecordedAt() -> EpochMs? {
+        queue.sync {
+            guard openIfNeeded(), let records else { return nil }
+            return try? records.newestRecordedAt()
+        }
+    }
+
     func clearQueue(_ completion: @escaping (Result<Int, Error>) -> Void) {
         queue.async {
             guard self.openIfNeeded(), let records = self.records else {

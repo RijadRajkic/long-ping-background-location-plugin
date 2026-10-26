@@ -109,4 +109,18 @@ struct StopDetector: Equatable {
         parkedAt = fix
         anchor = nil
     }
+
+    /// `changePace()`. The last fix becomes the anchor / parked spot only if it is fresh and accurate, and is then
+    /// returned to be recorded as the motionchange at once. Otherwise the state is forced with no point and nil is
+    /// returned: the next fix becomes the point and is recorded as the motionchange. A point that is not recorded
+    /// right away would judge the next fix and could undo the forced state before its motionchange exists.
+    mutating func changePace(_ isMoving: Bool, lastFix: Fix?, now: EpochMs, minAccuracyM: Double) -> Fix? {
+        let here = PendingMotionChange.immediateFix(lastFix: lastFix, now: now, minAccuracyM: minAccuracyM)
+        if isMoving {
+            forceMoving(at: here)
+        } else {
+            forceParked(at: here)
+        }
+        return here
+    }
 }

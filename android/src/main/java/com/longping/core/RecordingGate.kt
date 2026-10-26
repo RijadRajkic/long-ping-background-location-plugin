@@ -35,6 +35,11 @@ class RecordingGate(lastRecordedTimeMs: Long? = null) {
 
     val isMotionChangePending: Boolean get() = pendingMotionChangeSinceMs != null
 
+    /** Engine start: the interval clock from [resumeTimeMs]. */
+    fun seed(lastRecordedTimeMs: Long?) {
+        this.lastRecordedTimeMs = lastRecordedTimeMs
+    }
+
     /** Tracking (re)started at [nowMs]: the overdue clock runs from here until the first record. */
     fun beginWindow(nowMs: Long) {
         windowStartMs = nowMs
@@ -124,6 +129,15 @@ class RecordingGate(lastRecordedTimeMs: Long? = null) {
          */
         fun forcedMotionFix(lastFix: Fix?, nowMs: Long, minAccuracyM: Double): Fix? =
             lastFix?.takeIf { nowMs - it.timeMs <= FRESH_FIX_MS && isAccurate(it, minAccuracyM) }
+
+        /**
+         * The interval clock when the engine starts. lastRecordedTime is persisted at most every
+         * 30 s, so after process death the newest queued record or the last location can be later;
+         * without them the first fix after a restart could be recorded too early (Android e2e S12).
+         * Capped at [nowMs]: a clock set back must not hold new fixes.
+         */
+        fun resumeTimeMs(persistedMs: Long?, newestQueuedMs: Long?, lastLocationAtMs: Long?, nowMs: Long): Long? =
+            listOfNotNull(persistedMs, newestQueuedMs, lastLocationAtMs).maxOrNull()?.let { minOf(it, nowMs) }
 
         fun isAccurate(fix: Fix, minAccuracyM: Double): Boolean =
             minAccuracyM == 0.0 || (fix.hasAccuracy && fix.accuracy <= minAccuracyM)

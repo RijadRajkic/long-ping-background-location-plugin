@@ -166,8 +166,8 @@ object UploadScheduler {
         state.copy(authorizationRequired = false, authPausedUntilMs = 0, failures = 0, nextAttemptAtMs = 0)
 }
 
-/** The optional `long_ping` object in a 2xx upload response. */
-data class RemoteDirective(val config: JSONObject?, val stop: Boolean) {
+/** The optional `long_ping` object in a 2xx upload response. [reset] clears the server's overrides (before [config]). */
+data class RemoteDirective(val config: JSONObject?, val stop: Boolean, val reset: Boolean = false) {
     companion object {
         fun parse(body: String?): RemoteDirective? {
             val text = body?.trim() ?: return null
@@ -181,6 +181,7 @@ data class RemoteDirective(val config: JSONObject?, val stop: Boolean) {
             return RemoteDirective(
                 config = Json.value(lp, "config") as? JSONObject,
                 stop = Json.value(lp, "stop") == true,
+                reset = Json.value(lp, "reset") == true,
             )
         }
     }

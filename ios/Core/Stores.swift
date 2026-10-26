@@ -93,6 +93,11 @@ final class RecordQueue {
 
     func count() throws -> Int { Int(try db.scalarInt("SELECT COUNT(*) FROM queue")) }
 
+    /// `recorded_at` of the newest queued record; nil when the queue is empty.
+    func newestRecordedAt() throws -> EpochMs? {
+        try db.query("SELECT recorded_at FROM queue ORDER BY recorded_at DESC LIMIT 1") { $0.int64(0) }.first
+    }
+
     @discardableResult
     func clear() throws -> Int { try db.run("DELETE FROM queue") }
 

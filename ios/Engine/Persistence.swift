@@ -1,10 +1,11 @@
 import Foundation
 import Security
 
-/// Config and engine state in the `com.longping` UserDefaults suite (DESIGN.md, "Config").
+/// Config, server overrides and engine state in the `com.longping` UserDefaults suite (DESIGN.md, "Config").
 final class Preferences {
     static let suiteName = "com.longping"
     private static let configKey = "config"
+    private static let remoteOverridesKey = "remoteOverrides"
     private static let stateKey = "state"
     private static let installMarkerKey = "installed"
 
@@ -19,8 +20,22 @@ final class Preferences {
         return try? JSONValue.parse(text)
     }
 
+    /// The app's layer (configure() / setConfig()); the server's overrides are stored apart.
     func save(_ config: LongPingConfig) {
         defaults.set(config.json.serialized(), forKey: Self.configKey)
+    }
+
+    func loadRemoteOverrides() -> JSONValue? {
+        guard let text = defaults.string(forKey: Self.remoteOverridesKey) else { return nil }
+        return try? JSONValue.parse(text)
+    }
+
+    func saveRemoteOverrides(_ overrides: JSONObject) {
+        if overrides.isEmpty {
+            defaults.removeObject(forKey: Self.remoteOverridesKey)
+        } else {
+            defaults.set(JSONValue.object(overrides).serialized(), forKey: Self.remoteOverridesKey)
+        }
     }
 
     func loadState() -> PersistedEngineState {

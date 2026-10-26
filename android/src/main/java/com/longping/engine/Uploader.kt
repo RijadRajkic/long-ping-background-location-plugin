@@ -153,9 +153,12 @@ internal class Uploader(
                     if (auth.get() != credentials && credentialRetries++ < 2) continue
                     if (credentials != null && credentials.canRefresh && !refreshed) {
                         refreshed = true
-                        if (refresh(credentials, http.timeoutSec)) continue // retry the same records once
+                        val failure = refresh(credentials, http.timeoutSec) ?: continue // refreshed: retry the same records once
+                        pauseForAuth(verdict.status, failure, credentials)
+                        break
                     }
-                    pauseForAuth(verdict.status, credentials)
+                    val error = if (refreshed) "rejected after token refresh (HTTP ${verdict.status})" else "HTTP ${verdict.status}"
+                    pauseForAuth(verdict.status, error, credentials)
                     break
                 }
                 is UploadVerdict.Shrink -> {
@@ -192,31 +195,37 @@ internal class Uploader(
         return out
     }
 
-    private fun refresh(credentials: AuthCredentials, timeoutSec: Double): Boolean {
-        val url = credentials.refreshUrl ?: return false
+    /**
+     * Null when new tokens are stored, else the `authorization` event's error, worded as on iOS:
+     * "token refresh failed: HTTP <status>" or "token refresh failed: <network error>".
+     */
+    private fun refresh(credentials: AuthCredentials, timeoutSec: Double): String? {
+        val url = credentials.refreshUrl ?: return "no refresh URL"
         val response = transport.send(url, "POST", credentials.refreshHeaders, credentials.refreshBody(), (timeoutSec * 1000).toInt())
         val tokens = if (response.ok) AuthCredentials.parseRefreshResponse(response.body) else null
         if (tokens == null) {
-            log.warn(TAG, "token refresh failed (${statusText(response)})")
-            return false
+            val failure = "token refresh failed: ${if (response.status == 0) response.error ?: "network error" else "HTTP ${response.status}"}"
+            log.warn(TAG, failure)
+            return failure
         }
         if (!auth.replaceIf(credentials, credentials.withTokens(tokens.first, tokens.second))) {
             log.info(TAG, "token refreshed, but the app replaced the authorization meanwhile; using the app's")
-            return true
+            return null
         }
         log.info(TAG, "access token refreshed")
-        return true
+        return null
     }
 
-    private fun pauseForAuth(status: Int, credentials: AuthCredentials?) {
+    /** [error] is the `authorization` event's text (same on both platforms); the log also says why no refresh ran. */
+    private fun pauseForAuth(status: Int, error: String, credentials: AuthCredentials?) {
         val reason = when {
             credentials == null -> "no authorization stored"
             !credentials.canRefresh -> "no refreshUrl to renew the token"
-            else -> "token refresh failed"
+            else -> error
         }
         update { UploadScheduler.authPaused(it, clock.nowMs()) }
         log.warn(TAG, "HTTP $status: uploads paused for 15 min or until setAuthorization() ($reason)")
-        host.emit("authorization", JSONObject().put("status", status).put("error", reason))
+        host.emit("authorization", JSONObject().put("status", status).put("error", error))
     }
 
     private fun report(r: HttpTransport.Response, count: Int, method: String, url: String?, elapsedMs: Long) {

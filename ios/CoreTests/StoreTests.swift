@@ -78,6 +78,15 @@ final class RecordQueueTests: XCTestCase {
         XCTAssertEqual(try queue.count(), 0)
     }
 
+    func testNewestRecordedAt() throws {
+        XCTAssertNil(try queue.newestRecordedAt())
+        try queue.insert(uuid: "late", recordedAt: now + 5, json: "{}")
+        try queue.insert(uuid: "early", recordedAt: now, json: "{}")
+        XCTAssertEqual(try queue.newestRecordedAt(), now + 5)
+        try queue.clear()
+        XCTAssertNil(try queue.newestRecordedAt())
+    }
+
     func testFileBackedDatabaseSurvivesReopen() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("longping-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

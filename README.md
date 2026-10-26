@@ -51,6 +51,24 @@ Nothing to add: the plugin's manifest brings the location, foreground-service an
 13+ ask for `POST_NOTIFICATIONS` so the tracking notification is visible. If your Play listing qualifies, also
 declare `android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` to use the direct exemption prompt.
 
+**Google Play.** The plugin's manifest adds `ACCESS_BACKGROUND_LOCATION` and a foreground service of type
+`location` to your app. Play will ask you to complete the background-location declaration and the foreground-service
+declaration in the Play Console before it accepts the release. If your app only tracks while it is open, remove the
+background permission in your app's `AndroidManifest.xml`:
+
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+  <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" tools:node="remove" />
+</manifest>
+```
+
+### Plain `http://` endpoints
+
+Both platforms block cleartext HTTP by default (Android since targetSdk 28). For a test server on `http://`, add an Android
+`network_security_config` that permits cleartext for that host, and an iOS App Transport Security exception
+(`NSAppTransportSecurity` → `NSExceptionDomains`) in `Info.plist`. Use `https://` in production.
+
 ## Quick start
 
 ```ts
@@ -78,6 +96,10 @@ const sub = LongPing.onLocation((location) => console.log(location.coords));
 
 `configure()` is safe to call on every launch: it never starts, stops or shows a prompt. If tracking was
 running when the app was killed, it is already running again by the time your JS loads.
+
+Keep `onLocation` light: use it for UI only. JavaScript timers and network calls pause while the app is in the
+background, so an upload or heavy work there stalls or is lost. The native uploader already sends every record to
+`http.url`.
 
 ## What your server receives
 
@@ -110,7 +132,10 @@ Include a `long_ping` object in any 2xx reply:
 { "long_ping": { "config": { "movingIntervalSec": 5, "http": { "uploadIntervalSec": 15 } } } }
 ```
 
-The device merges the config immediately, even while the app is in the background. `{"long_ping": {"stop": true}}`
+The device merges the config immediately, even while the app is in the background. These server overrides are kept
+on the device and sit on top of your app's config: they survive app restarts and later `configure()` / `setConfig()`
+calls until your server clears them with `{"long_ping": {"reset": true}}` (a `config` in the same reply is applied
+after the reset). `remoteConfig: false` in your app's config stops applying them. `{"long_ping": {"stop": true}}`
 stops tracking.
 
 ## Events

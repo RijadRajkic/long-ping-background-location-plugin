@@ -82,7 +82,11 @@ export interface Config {
   startOnBoot?: boolean;
   /** Stop tracking when the app is swiped away. Default false. */
   stopOnTerminate?: boolean;
-  /** Apply `long_ping.config` from upload responses. Default true. */
+  /**
+   * Apply the server's overrides (`long_ping.config` in upload responses). They are kept on the device across
+   * configure() / setConfig() until `long_ping.reset`; false keeps them stored but unused. Only the app sets this.
+   * Default true.
+   */
   remoteConfig?: boolean;
   /** Android foreground-service notification. */
   notification?: {
@@ -146,6 +150,7 @@ export interface State {
   lastLocationAt: number | null;
   queueCount: number;
   authorizationRequired: boolean;
+  /** The config in effect: your app's config with the server's overrides on top. */
   config: ResolvedConfig;
 }
 

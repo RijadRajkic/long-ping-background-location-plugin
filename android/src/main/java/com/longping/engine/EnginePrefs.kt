@@ -4,15 +4,18 @@ import android.annotation.SuppressLint
 import android.content.Context
 
 /**
- * SharedPreferences `longping` (DESIGN.md): config, engine state, upload pacing, last location,
- * flags, auth blob. Config, enabled flips and auth use commit(): they run on engine threads (never
- * the main thread) and must survive a process kill right after the call returns.
+ * SharedPreferences `longping` (DESIGN.md): config, server overrides, engine state, upload pacing,
+ * last location, flags, auth blob. Config, overrides, enabled flips and auth use commit(): they run
+ * on engine threads (never the main thread) and must survive a process kill right after the call
+ * returns.
  */
 @SuppressLint("ApplySharedPref")
 internal class EnginePrefs(context: Context) {
     private val sp = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
+    /** The app's layer (configure / setConfig); the server's overrides are stored apart. */
     val config: String? get() = sp.getString(KEY_CONFIG, null)
+    val remoteOverrides: String? get() = sp.getString(KEY_REMOTE_OVERRIDES, null)
     val state: String? get() = sp.getString(KEY_STATE, null)
     val upload: String? get() = sp.getString(KEY_UPLOAD, null)
     val lastLocation: String? get() = sp.getString(KEY_LAST_LOCATION, null)
@@ -34,6 +37,13 @@ internal class EnginePrefs(context: Context) {
 
     fun saveConfig(json: String) {
         sp.edit().putString(KEY_CONFIG, json).commit()
+    }
+
+    /** `{}` (no overrides) removes the key. */
+    fun saveRemoteOverrides(json: String) {
+        val editor = sp.edit()
+        if (json == "{}") editor.remove(KEY_REMOTE_OVERRIDES) else editor.putString(KEY_REMOTE_OVERRIDES, json)
+        editor.commit()
     }
 
     /** [durable]: commit synchronously (enabled flips must survive an immediate process kill). */
@@ -59,6 +69,7 @@ internal class EnginePrefs(context: Context) {
     companion object {
         const val NAME = "longping"
         const val KEY_CONFIG = "config"
+        const val KEY_REMOTE_OVERRIDES = "remote_overrides"
         const val KEY_STATE = "state"
         const val KEY_UPLOAD = "upload"
         const val KEY_LAST_LOCATION = "last_location"

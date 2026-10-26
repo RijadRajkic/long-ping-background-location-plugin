@@ -255,14 +255,17 @@ enum AuthRefresh {
 struct RemoteCommand: Equatable {
     var config: JSONValue?
     var stop: Bool
+    /// Clear the server's overrides (before `config`, when both are present).
+    var reset = false
 
     static func parse(_ data: Data?) -> RemoteCommand? {
         guard let data, !data.isEmpty, let json = try? JSONValue.parse(data: data),
               let command = json["long_ping"]?.objectValue else { return nil }
         let config = command["config"].flatMap { $0.objectValue != nil ? $0 : nil }
         let stop = command["stop"]?.boolValue == true
-        guard config != nil || stop else { return nil }
-        return RemoteCommand(config: config, stop: stop)
+        let reset = command["reset"]?.boolValue == true
+        guard config != nil || stop || reset else { return nil }
+        return RemoteCommand(config: config, stop: stop, reset: reset)
     }
 }
 

@@ -114,6 +114,18 @@ class RemoteDirectiveTest {
         assertTrue(d.stop)
         val onlyConfig = RemoteDirective.parse("""{"long_ping":{"config":{"debug":true}}}""")!!
         assertFalse(onlyConfig.stop)
+        assertFalse(onlyConfig.reset)
+    }
+
+    @Test fun parsesReset() {
+        val reset = RemoteDirective.parse("""{"long_ping":{"reset":true}}""")!!
+        assertTrue(reset.reset)
+        assertNull(reset.config)
+        assertFalse(reset.stop)
+        val both = RemoteDirective.parse("""{"long_ping":{"reset":true,"config":{"movingIntervalSec":5}}}""")!!
+        assertTrue(both.reset)
+        assertEquals(5, both.config!!.getInt("movingIntervalSec"))
+        assertFalse(RemoteDirective.parse("""{"long_ping":{"reset":"yes"}}""")!!.reset)
     }
 
     @Test fun ignoresAnythingElse() {

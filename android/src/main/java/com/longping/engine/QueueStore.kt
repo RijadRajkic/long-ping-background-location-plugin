@@ -63,5 +63,11 @@ internal class QueueStore(private val helper: LongPingDatabase) {
 
     fun count(): Long = DatabaseUtils.queryNumEntries(helper.readableDatabase, "queue")
 
+    /** recorded_at of the newest queued record; null when the queue is empty. */
+    fun newestRecordedAt(): Long? =
+        helper.readableDatabase.rawQuery("SELECT MAX(recorded_at) FROM queue", null).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+        }
+
     fun clear(): Int = helper.writableDatabase.delete("queue", null, null)
 }
