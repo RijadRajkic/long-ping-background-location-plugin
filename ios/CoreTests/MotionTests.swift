@@ -150,8 +150,8 @@ final class IntervalPolicyTests: XCTestCase {
     func testTolerance() {
         XCTAssertEqual(IntervalPolicy.toleranceMs(intervalSec: 1), 100)
         XCTAssertEqual(IntervalPolicy.toleranceMs(intervalSec: 5), 500)
-        XCTAssertEqual(IntervalPolicy.toleranceMs(intervalSec: 30), 1000)
-        XCTAssertEqual(IntervalPolicy.toleranceMs(intervalSec: 3600), 1000)
+        XCTAssertEqual(IntervalPolicy.toleranceMs(intervalSec: 30), 500)
+        XCTAssertEqual(IntervalPolicy.toleranceMs(intervalSec: 3600), 500)
     }
 }
 
@@ -168,9 +168,9 @@ final class RecordingGateTests: XCTestCase {
 
     func testIntervalWithTolerance() {
         var gate = RecordingGate(lastRecordedTime: fix(at: 0).time, armedAt: t0)
-        XCTAssertEqual(gate.evaluate(fix(at: 28.9), now: at(29), intervalSec: 30, minAccuracyM: 100), .tooSoon)
-        XCTAssertEqual(gate.evaluate(fix(at: 29), now: at(29), intervalSec: 30, minAccuracyM: 100), .record(fix(at: 29), accuracyWaived: false),
-                       "tolerance = min(1 s, 10%)")
+        XCTAssertEqual(gate.evaluate(fix(at: 29.4), now: at(29.4), intervalSec: 30, minAccuracyM: 100), .tooSoon)
+        XCTAssertEqual(gate.evaluate(fix(at: 29.5), now: at(29.5), intervalSec: 30, minAccuracyM: 100), .record(fix(at: 29.5), accuracyWaived: false),
+                       "tolerance = min(0.5 s, 10%)")
         XCTAssertEqual(gate.evaluate(fix(at: 30), now: at(30), intervalSec: 30, minAccuracyM: 100), .tooSoon, "clock restarts at the record")
 
         var fast = RecordingGate(lastRecordedTime: fix(at: 0).time, armedAt: t0)

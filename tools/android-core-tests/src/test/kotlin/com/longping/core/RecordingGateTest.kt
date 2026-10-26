@@ -24,11 +24,12 @@ class RecordingGateTest {
 
     @Test fun intervalWithTolerance() {
         val gate = RecordingGate(lastRecordedTimeMs = 0)
-        // tolerance = min(1 s, 10 %) = 1 s -> due at 29_000
-        assertEquals(Decision.Skip(SkipReason.TOO_SOON), gate.offer(fix(timeMs = 28_999), 28_999, interval, minAcc))
-        gate.offer(fix(timeMs = 29_000), 29_000, interval, minAcc).recorded()
+        // tolerance = min(0.5 s, 10 %) = 0.5 s -> due at 29_500
+        assertEquals(Decision.Skip(SkipReason.TOO_SOON), gate.offer(fix(timeMs = 29_499), 29_499, interval, minAcc))
+        gate.offer(fix(timeMs = 29_500), 29_500, interval, minAcc).recorded()
         assertEquals(Decision.Skip(SkipReason.TOO_SOON), gate.offer(fix(timeMs = 40_000), 40_000, interval, minAcc))
-        gate.offer(fix(timeMs = 58_000), 58_000, interval, minAcc).recorded()
+        assertEquals(Decision.Skip(SkipReason.TOO_SOON), gate.offer(fix(timeMs = 58_999), 58_999, interval, minAcc))
+        gate.offer(fix(timeMs = 59_000), 59_000, interval, minAcc).recorded()
     }
 
     @Test fun shortIntervalToleranceIsTenPercent() {

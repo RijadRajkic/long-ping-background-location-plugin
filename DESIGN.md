@@ -33,7 +33,6 @@ ios/Package.swift         SwiftPM package for Core + CoreTests (`swift test` on 
 android/                  com.longping — LongPingModule (RN bridge) + engine + core
 android/src/main/java/com/longping/core/   pure Kotlin logic, no android.* imports
 tools/android-core-tests/ standalone JVM Gradle project compiling core/ + its tests
-tools/license/            license key tooling (Node, seller-side only)
 ```
 
 Native module name: `LongPing`. Android package: `com.longping`. Codegen spec class: `NativeLongPingSpec`
@@ -49,7 +48,7 @@ Error codes table.
 |---|---|
 | `configure(config)` | Replace the whole config with defaults + `config`, validate, persist, apply live. Idempotent; safe every launch. Does not start or stop. Resolves State. |
 | `setConfig(partial)` | Deep-merge into the current config (objects merge, arrays/scalars replace), validate, persist, apply. Resolves State. |
-| `start()` | Check license + permission; persist `enabled=true`; begin tracking; take an immediate `motionchange` fix (state = moving). Resolves State. Rejects `LICENSE_INVALID`, `PERMISSION_DENIED`, `LOCATION_SERVICES_OFF` (still persists nothing in that case). |
+| `start()` | Check permission; persist `enabled=true`; begin tracking; take an immediate `motionchange` fix (state = moving). Resolves State. Rejects `PERMISSION_DENIED`, `LOCATION_SERVICES_OFF` (still persists nothing in that case). |
 | `stop()` | Persist `enabled=false`; stop updates/service/regions. Queue is kept and still uploads. Resolves State. |
 | `getState()` | Resolves State. |
 | `setAuthorization(auth)` | Store `{accessToken, refreshToken?, refreshUrl?, refreshPayload?, refreshHeaders?}` in secure storage; clear `authorizationRequired`; trigger an upload. |
@@ -76,7 +75,6 @@ emitted while a JS listener exists; nothing is buffered for JS.
 ## Config (keys exact; defaults in brackets)
 
 ```
-licenseKey            string|null   [null]
 movingIntervalSec     number        [30]    clamp 1..86400
 parkedIntervalSec     number        [180]   clamp 1..86400
 accuracy              'high'|'balanced'|'low'  ['high']
@@ -130,7 +128,7 @@ OS location request is re-issued (Android) / the sampling schedule is updated (i
 A fix from the OS is **recorded** (stored, emitted as `location`, queued for upload) when:
 
 - its horizontal accuracy <= `minAccuracyM` (or `minAccuracyM` == 0), and
-- `fix.time - lastRecordedTime >= effectiveInterval - tolerance`, tolerance = `min(1 s, 10% of interval)`.
+- `fix.time - lastRecordedTime >= effectiveInterval - tolerance`, tolerance = `min(0.5 s, 10% of interval)`.
 
 Overdue rule: if `now - lastRecordedTime > effectiveInterval + 30 s` and only inaccurate fixes arrived, record
 the most accurate fix seen since the last record (accuracy filter waived, logged).
@@ -286,7 +284,7 @@ AuthorizationStatus: `0 NOT_DETERMINED, 1 RESTRICTED, 2 DENIED, 3 ALWAYS, 4 WHEN
 State:
 ```
 { enabled, isMoving, lastLocation: Location|null, lastLocationAt: ms|null, queueCount,
-  authorizationRequired, license: 'valid'|'debug'|'invalid'|'missing', config }
+  authorizationRequired, config }
 ```
 
 ProviderState:
@@ -310,24 +308,13 @@ ProviderState:
 
 ## Error codes
 
-`INVALID_CONFIG, LICENSE_INVALID, PERMISSION_DENIED, LOCATION_SERVICES_OFF, NOT_ENABLED, TIMEOUT,
+`INVALID_CONFIG, PERMISSION_DENIED, LOCATION_SERVICES_OFF, NOT_ENABLED, TIMEOUT,
 NO_ACTIVITY (Android, no foreground activity for a prompt), INTERNAL`.
 
 ## License
 
-Key format: `LP1.<payload>.<signature>`, both parts base64url without padding.
-- payload JSON: `{ "v": 1, "sub": "customer id", "apps": ["com.bhx", "com.bhx.*"], "plan": "pro", "upd": "2027-10-26" }`
-  `apps`: exact bundle id / applicationId, or a prefix ending in `.*`. `upd`: updates-until date (UTC, inclusive);
-  absent = no limit.
-- signature: ECDSA P-256 / SHA-256, DER-encoded, over the ASCII bytes of `LP1.<payload>`.
-- public key (SPKI DER, base64), embedded in both engines:
-  `MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfz4a/OgAm9wr//FwRGIEJr+t4l2Mbj7E7b0jaVLwb0x+f+YUg6XZCBmzW6x2zF9sy4yVqBKSj8v0dt9lC9xLhQ==`
-- Valid when: signature verifies, `v == 1`, the app id matches `apps`, and the plugin's release date constant
-  (`PLUGIN_RELEASE_DATE`, `"2026-10-26"`, one constant per platform) <= `upd`. A key never expires at runtime:
-  it covers every plugin release up to `upd`.
-- Debug builds (Android `FLAG_DEBUGGABLE`, iOS `#if DEBUG`) and the iOS simulator / Android emulator run without
-  a key (`license: 'debug'`). Release builds without a valid key: `start()` rejects `LICENSE_INVALID`,
-  `license: 'invalid'|'missing'`, and nothing tracks. Checked at `configure`, `start` and native resume.
+MIT. The engines do no license checks of any kind. A `licenseKey` left in an older config is ignored as an
+unknown key (logged at debug).
 
 ## Clarifications (v0.1, both platforms)
 
@@ -335,9 +322,6 @@ Decisions taken while building the engines; they extend the sections above.
 
 - `start()` when already enabled only makes sure tracking runs: no forced moving state, no extra motionchange.
   Calling it on every launch is safe.
-- A key that verifies reports `license: 'valid'` in development builds too; `'debug'` means "development build
-  running without a valid key". A key that turns invalid while enabled suspends tracking but keeps
-  `enabled = true` (only `stop()` disables); a corrected key resumes it.
 - Config: `null` on a non-nullable key means its default; `''` on a nullable string means `null`; `http.url` must
   be an absolute http(s) URL; `lowBattery` needs both fields (belowPct 0..100, intervalSec 1..86400);
   `uploadIntervalSec` 0..86400; negative `minAccuracyM` is `INVALID_CONFIG`.

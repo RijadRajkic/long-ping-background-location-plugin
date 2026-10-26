@@ -18,9 +18,10 @@ enum IntervalPolicy {
         return base
     }
 
-    /// `min(1 s, 10% of interval)`, in ms.
+    /// `min(0.5 s, 10% of interval)`, in ms. Half a second, not more: iOS delivers a fix every second, and a
+    /// full second of slack recorded one fix early every time (10 s became 9 s).
     static func toleranceMs(intervalSec: Double) -> EpochMs {
-        EpochMs(seconds: min(1, intervalSec * 0.1))
+        EpochMs(seconds: min(0.5, intervalSec * 0.1))
     }
 }
 

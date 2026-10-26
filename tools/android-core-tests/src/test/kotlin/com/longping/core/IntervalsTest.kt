@@ -33,8 +33,8 @@ class IntervalsTest {
         assertEquals(-1.0, BatteryState.fromRaw(50, 0, false).level, 0.0)
     }
 
-    @Test fun toleranceIsMinOfOneSecondAndTenPercent() {
-        assertEquals(1000, Intervals.toleranceMs(30_000))
+    @Test fun toleranceIsMinOfHalfASecondAndTenPercent() {
+        assertEquals(500, Intervals.toleranceMs(30_000))
         assertEquals(500, Intervals.toleranceMs(5_000))
         assertEquals(100, Intervals.toleranceMs(1_000))
     }

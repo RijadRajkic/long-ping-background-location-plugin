@@ -15,6 +15,7 @@
     "ios/LongPing.mm",
     "ios/Engine",
     "ios/Core",
+    "ios/PrivacyInfo.xcprivacy",
     "LongPing.podspec",
     "README.md",
     "LICENSE.md"
@@ -29,7 +30,7 @@
     "ios",
     "android"
   ],
-  "license": "SEE LICENSE IN LICENSE.md",
+  "license": "MIT",
   "peerDependencies": {
     "react": "*",
     "react-native": ">=0.76.0"
@@ -41,9 +42,5 @@
     "android": {
       "javaPackageName": "com.longping"
     }
-  },
-  "scripts": {
-    "license:issue": "node tools/license/issue.mjs",
-    "license:verify": "node tools/license/verify.mjs"
   }
 }

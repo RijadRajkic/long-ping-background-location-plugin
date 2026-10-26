@@ -21,7 +21,6 @@ import com.longping.core.EngineState
 import com.longping.core.ErrorCode
 import com.longping.core.Fix
 import com.longping.core.Intervals
-import com.longping.core.LicenseVerifier
 import com.longping.core.LocationRecord
 import com.longping.core.LocationRequestSpec
 import com.longping.core.LogQuery
@@ -84,7 +83,6 @@ class LongPingEngine private constructor(context: Context) {
     internal val deviceSettings = DeviceSettings(app)
     internal val notifications = TrackingNotification(app)
     private val battery = BatteryMonitor(app)
-    private val license = LicenseGuard(app, log)
     private val providers = ProviderMonitor(app, permissions, deviceSettings) { guard("provider change") { onProviderChange(it) } }
     private val network = NetworkMonitor(app, log) { uploader.trigger(UploadTrigger.CONNECTIVITY) }
     private val uploader: Uploader
@@ -110,7 +108,6 @@ class LongPingEngine private constructor(context: Context) {
     private var lastLocationDirty = false
     private var lastNotificationAt = 0L
     private var locationAvailable: Boolean? = null
-    private var suspendedForLicense = false
     private var serviceRequestedAt = 0L
     private var watchdogTicks = 0
 
@@ -392,10 +389,6 @@ class LongPingEngine private constructor(context: Context) {
     // ---------------------------------------------------------------- tracking
 
     private fun startTracking() {
-        val status = license.status(config.licenseKey, "start")
-        if (!LicenseVerifier.allowsTracking(status)) {
-            throw LongPingException(ErrorCode.LICENSE_INVALID, "license ${status.wire}: ${license.reason(config.licenseKey)}")
-        }
         requireLocationAccess()
         if (state.enabled && service != null) {
             log.info(TAG, "start(): already tracking")
@@ -407,7 +400,6 @@ class LongPingEngine private constructor(context: Context) {
         detector.force(true, null)
         state = state.copy(enabled = true).withMotion(detector.state)
         persistState(durable = true)
-        suspendedForLicense = false
         gate.beginWindow(now)
         gate.requestMotionChange(now)
         log.info(TAG, "tracking started")
@@ -439,14 +431,8 @@ class LongPingEngine private constructor(context: Context) {
         startService(reason)
     }
 
-    /** License + permission gate for (re)starting; reports why not. */
+    /** Permission gate for (re)starting; reports why not. */
     private fun mayTrack(reason: String): Boolean {
-        val status = license.status(config.licenseKey, reason)
-        if (!LicenseVerifier.allowsTracking(status)) {
-            suspendedForLicense = true
-            emitError(ErrorCode.LICENSE_INVALID, "tracking not running ($reason): license ${status.wire}")
-            return false
-        }
         if (!permissions.hasForeground()) {
             emitError(ErrorCode.PERMISSION_DENIED, "tracking not running ($reason): location permission is not granted")
             return false
@@ -627,20 +613,6 @@ class LongPingEngine private constructor(context: Context) {
         log.level = next.logLevel
         r.unknownKeys.forEach { log.debug(TAG, "$source: unknown key '$it' ignored") }
         log.info(TAG, "$source applied")
-
-        val status = license.status(next.licenseKey, source)
-        if (state.enabled) {
-            if (!LicenseVerifier.allowsTracking(status)) {
-                if (service != null) {
-                    suspendedForLicense = true
-                    emitError(ErrorCode.LICENSE_INVALID, "tracking suspended: license ${status.wire}")
-                    stopService()
-                }
-            } else if (suspendedForLicense) {
-                suspendedForLicense = false
-                resume("license now ${status.wire}")
-            }
-        }
         if (old.notification != next.notification || old.debug != next.debug) refreshNotification(force = true)
         reevaluateRequest(source)
         if (old.http != next.http) uploader.trigger(UploadTrigger.WATCHDOG)
@@ -669,7 +641,6 @@ class LongPingEngine private constructor(context: Context) {
         .put("lastLocationAt", lastLocationAt ?: JSONObject.NULL)
         .put("queueCount", countQueue())
         .put("authorizationRequired", uploader.authorizationRequired)
-        .put("license", license.status(config.licenseKey, "getState").wire)
         .put("config", config.toJson())
 
     // ---------------------------------------------------------------- plumbing

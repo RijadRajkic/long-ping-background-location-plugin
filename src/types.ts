@@ -15,7 +15,6 @@ export type AuthorizationStatus = (typeof AuthorizationStatus)[keyof typeof Auth
 
 export type ErrorCode =
   | 'INVALID_CONFIG'
-  | 'LICENSE_INVALID'
   | 'PERMISSION_DENIED'
   | 'LOCATION_SERVICES_OFF'
   | 'NOT_ENABLED'
@@ -54,8 +53,6 @@ export interface HttpConfig {
 }
 
 export interface Config {
-  /** Required for release builds. Debug builds, simulators and emulators run without one. */
-  licenseKey?: string | null;
   /** Seconds between fixes while moving. 1..86400, default 30. */
   movingIntervalSec?: number;
   /** Seconds between fixes while parked. 1..86400, default 180. */
@@ -81,7 +78,7 @@ export interface Config {
     /** 1..365, default 7. */
     maxDays?: number;
   };
-  /** Android: restart after reboot / app update. iOS: relaunch on movement. Default true. */
+  /** Android: restart after a reboot or app update. (iOS relaunches on movement whenever tracking is on.) Default true. */
   startOnBoot?: boolean;
   /** Stop tracking when the app is swiped away. Default false. */
   stopOnTerminate?: boolean;
@@ -149,7 +146,6 @@ export interface State {
   lastLocationAt: number | null;
   queueCount: number;
   authorizationRequired: boolean;
-  license: 'valid' | 'debug' | 'invalid' | 'missing';
   config: ResolvedConfig;
 }
 

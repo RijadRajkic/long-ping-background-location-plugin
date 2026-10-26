@@ -165,7 +165,9 @@ internal class Uploader(
                 is UploadVerdict.RetryLater -> {
                     val delay = UploadPolicy.backoffDelayMs(state.failures, response.retryAfter) { random.nextDouble() }
                     update { UploadScheduler.retryLater(it, clock.nowMs(), delay, networkFailure = response.status == 0) }
-                    log.warn(TAG, "upload failed (${statusText(response)}); next attempt in ${delay / 1000} s")
+                    // The next automatic attempt also waits for uploadIntervalSec; log when it really happens.
+                    val nextInSec = (UploadScheduler.nextDueAtMs(state, config.http.uploadIntervalSec) - clock.nowMs()).coerceAtLeast(0) / 1000
+                    log.warn(TAG, "upload failed (${statusText(response)}); records kept; backoff ${delay / 1000} s, next attempt in $nextInSec s")
                     scheduleWakeup(config)
                     break
                 }

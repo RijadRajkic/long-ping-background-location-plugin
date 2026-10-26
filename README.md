@@ -17,6 +17,8 @@ quiet for three hours" is not acceptable.
   termination on significant movement or leaving the parked area.
 - **Explains its silences.** An on-device log of every state change, restart and upload, readable from JS.
 
+Free and open source (MIT). No license key, no paid tier.
+
 Requires React Native 0.76+ (New Architecture), iOS 15.1+, Android 7.0+ (API 24).
 
 ## Install
@@ -53,7 +55,6 @@ declare `android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` to use the dir
 import LongPing from 'react-native-long-ping';
 
 await LongPing.configure({
-  licenseKey: 'LP1.…',             // release builds only; debug builds run without one
   movingIntervalSec: 30,
   parkedIntervalSec: 180,
   http: {
@@ -125,6 +126,5 @@ stops tracking.
 
 ## License
 
-Commercial. A license key is tied to your app's bundle id / application id and covers every release published
-up to its update date; it never stops working at runtime. Debug builds, simulators and emulators run without a
-key. See `LICENSE.md`.
+Free and open source under the MIT license: free for personal and commercial use, no license key, no paid tier,
+no limits. See `LICENSE.md`.

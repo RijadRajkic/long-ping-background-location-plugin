@@ -27,8 +27,8 @@ object Intervals {
     fun requestSpec(config: LongPingConfig, isMoving: Boolean, battery: BatteryState) =
         LocationRequestSpec(config.accuracy, effectiveIntervalMs(config, isMoving, battery))
 
-    /** Recording tolerance: min(1 s, 10 % of the interval). */
-    fun toleranceMs(intervalMs: Long): Long = min(1000L, intervalMs / 10)
+    /** Recording tolerance: min(0.5 s, 10 % of the interval). */
+    fun toleranceMs(intervalMs: Long): Long = min(500L, intervalMs / 10)
 
     /**
      * Watchdog rule: no fix for longer than max(2 x interval, interval + 60 s) means the OS

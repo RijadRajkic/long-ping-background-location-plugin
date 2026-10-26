@@ -269,9 +269,13 @@ final class Uploader {
             sendNext()
 
         case .backoff:
-            let retryAfter = UploadPolicy.retryAfterSec(httpResponse?.value(forHTTPHeaderField: "Retry-After"), now: clock.nowMs)
-            let delay = scheduler.failedTransiently(now: clock.nowMs, status: status, retryAfterSec: retryAfter, random: random)
-            logger.info("upload", String(format: "records kept; next attempt in %.0f s%@", delay, retryAfter == nil ? "" : " (Retry-After)"))
+            let now = clock.nowMs
+            let retryAfter = UploadPolicy.retryAfterSec(httpResponse?.value(forHTTPHeaderField: "Retry-After"), now: now)
+            let delay = scheduler.failedTransiently(now: now, status: status, retryAfterSec: retryAfter, random: random)
+            // The next automatic attempt also waits for uploadIntervalSec; log when it really happens.
+            let nextIn = Double(max(0, scheduler.nextDueAt(uploadIntervalSec: http.uploadIntervalSec) - now)) / 1000
+            logger.info("upload", String(format: "records kept; backoff %.0f s%@, next attempt in %.0f s", delay,
+                                         retryAfter == nil ? "" : " (Retry-After)", nextIn))
             finish()
 
         case .countAttempt:

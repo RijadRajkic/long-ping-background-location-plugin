@@ -22,8 +22,6 @@ final class Tracker: LocationControllerDelegate {
     private var pendingMotion: PendingMotionChange?
     /// Most recent fix from any source (also while stopped, via getCurrentPosition).
     private var lastFix: Fix?
-    private(set) var license: LicenseStatus = .missing
-    private var licenseResult: LicenseVerifier.Result = .missing
 
     private var trackingActive = false
     private var trackingStartedAt: EpochMs = 0
@@ -78,7 +76,6 @@ final class Tracker: LocationControllerDelegate {
 
         battery.onChange = { [weak self] snapshot in self?.batteryChanged(snapshot) }
         battery.start()
-        refreshLicense()
         observeLifecycle()
     }
 
@@ -90,11 +87,6 @@ final class Tracker: LocationControllerDelegate {
     func resume() {
         guard state.enabled else {
             logger.debug("engine", "launch: tracking not enabled")
-            return
-        }
-        refreshLicense()
-        guard LicenseGate.allowsTracking(license) else {
-            reportLicenseBlock(context: "resume")
             return
         }
         let status = location.authorizationStatus
@@ -151,18 +143,12 @@ final class Tracker: LocationControllerDelegate {
         }
         logger.info("config", "\(source) applied")
         uploader.update(http: config.http)
-        refreshLicense()
         applyLive(previous: previous)
         return config
     }
 
     private func applyLive(previous: LongPingConfig) {
         guard state.enabled else { return }
-        guard LicenseGate.allowsTracking(license) else {
-            if trackingActive { endTracking() }
-            reportLicenseBlock(context: "config")
-            return
-        }
         guard trackingActive else {
             if location.authorizationStatus.isAuthorized { beginTracking(reason: "config") }
             return
@@ -179,49 +165,9 @@ final class Tracker: LocationControllerDelegate {
         }
     }
 
-    // MARK: - License
-
-    private func refreshLicense() {
-        let evaluation = LicenseGate.evaluate(key: config.licenseKey)
-        let changed = evaluation.status != license || evaluation.keyResult != licenseResult
-        license = evaluation.status
-        licenseResult = evaluation.keyResult
-        guard changed else { return }
-        let keyDescription: String
-        switch evaluation.keyResult {
-        case .valid(let payload): keyDescription = "valid (\(payload.plan ?? "?"), updates until \(payload.updatesUntil ?? "no limit"))"
-        case .missing: keyDescription = "missing"
-        case .invalid(let failure): keyDescription = "invalid: \(failure)"
-        }
-        if license == .debug {
-            logger.info("license", "development build: runs without a key (key is \(keyDescription))")
-        } else if license == .valid {
-            logger.info("license", "license \(keyDescription)")
-        } else {
-            logger.error("license", "license \(keyDescription); tracking is disabled in release builds")
-        }
-    }
-
-    var licenseFailureMessage: String {
-        switch licenseResult {
-        case .missing: return "licenseKey is missing (required in release builds)"
-        case .invalid(let failure): return "licenseKey is invalid: \(failure)"
-        case .valid: return "license is valid"
-        }
-    }
-
-    private func reportLicenseBlock(context: String) {
-        logger.error("license", "\(context): not tracking: \(licenseFailureMessage)")
-        events.emit(.error, ["code": ErrorCode.licenseInvalid.rawValue, "message": licenseFailureMessage])
-    }
-
     // MARK: - start / stop / changePace
 
     func start(_ completion: @escaping (LongPingError?) -> Void) {
-        refreshLicense()
-        guard LicenseGate.allowsTracking(license) else {
-            return completion(LongPingError(.licenseInvalid, licenseFailureMessage))
-        }
         let status = location.authorizationStatus
         guard status.isAuthorized else {
             return completion(LongPingError(.permissionDenied, "location permission is \(status.name); call requestPermission() first"))
@@ -557,7 +503,7 @@ final class Tracker: LocationControllerDelegate {
             logger.warn("permission", "precise location is off: fixes are approximate (several km)")
         }
         if status.isAuthorized {
-            if state.enabled, !trackingActive, LicenseGate.allowsTracking(license) { beginTracking(reason: "permission granted") }
+            if state.enabled, !trackingActive { beginTracking(reason: "permission granted") }
         } else if status != .notDetermined {
             failCurrentRequests(LongPingError(.permissionDenied, "location permission is \(status.name)"))
             if state.enabled {
@@ -590,7 +536,7 @@ final class Tracker: LocationControllerDelegate {
         logger.info("motion", "left the parked region: moving")
         detector.forceMoving(at: nil)
         syncDetectorState()
-        if !trackingActive, LicenseGate.allowsTracking(license), location.authorizationStatus.isAuthorized {
+        if !trackingActive, location.authorizationStatus.isAuthorized {
             beginTracking(reason: "region exit")
         }
         reconcileRegion()
@@ -735,7 +681,6 @@ final class Tracker: LocationControllerDelegate {
             "lastLocationAt": state.lastLocationAt.map { NSNumber(value: Double($0)) } ?? NSNull(),
             "queueCount": queueCount,
             "authorizationRequired": state.authorizationRequired,
-            "license": license.rawValue,
             "config": config.json.dictionaryObject,
         ]
     }
