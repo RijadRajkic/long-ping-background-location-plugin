@@ -12,7 +12,7 @@
   "dependencies": {
     "react": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-long-ping": "file:../react-native-long-ping-0.1.0.tgz",
+    "react-native-long-ping": "file:../react-native-long-ping-0.1.1.tgz",
     "react-native-safe-area-context": "^5.5.2"
   },
   "devDependencies": {

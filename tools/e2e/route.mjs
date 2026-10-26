@@ -26,3 +26,20 @@ export const parkLoop = (center = PARK, loops = 60) => {
   ];
   return Array.from({ length: loops }, () => square).flat();
 };
+
+/**
+ * Position on the same 4 m square `elapsedSec` seconds into a walk at `speed` m/s. The Android feeder samples it
+ * at 1 Hz, so both platforms park the same way. Returns [lat, lon].
+ */
+export const parkLoopAt = (center, elapsedSec, speed = 0.5) => {
+  const corners = parkLoop(center, 1);
+  const side = 4;
+  const d = (elapsedSec * speed) % (4 * side);
+  const i = Math.floor(d / side);
+  const f = (d - i * side) / side;
+  const [a, b] = [corners[i], corners[(i + 1) % 4]];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+};
+
+/** m/s → knots (the unit of the emulator console's `geo fix` velocity). */
+export const knots = (mps) => mps * 1.9438444924;
