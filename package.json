@@ -1,0 +1,49 @@
+{
+  "name": "react-native-long-ping",
+  "version": "0.1.0",
+  "description": "Background location for React Native on a fixed clock: any interval from 1 second, native upload queue, survives kills and reboots, no motion-classifier guesswork.",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "react-native": "src/index.ts",
+  "source": "src/index.ts",
+  "files": [
+    "src",
+    "android/build.gradle",
+    "android/src/main",
+    "ios/LongPing.h",
+    "ios/LongPing.mm",
+    "ios/Engine",
+    "ios/Core",
+    "LongPing.podspec",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "keywords": [
+    "react-native",
+    "background-location",
+    "geolocation",
+    "gps",
+    "tracking",
+    "fleet",
+    "ios",
+    "android"
+  ],
+  "license": "SEE LICENSE IN LICENSE.md",
+  "peerDependencies": {
+    "react": "*",
+    "react-native": ">=0.76.0"
+  },
+  "codegenConfig": {
+    "name": "LongPingSpec",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "android": {
+      "javaPackageName": "com.longping"
+    }
+  },
+  "scripts": {
+    "license:issue": "node tools/license/issue.mjs",
+    "license:verify": "node tools/license/verify.mjs"
+  }
+}

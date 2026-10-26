@@ -1,0 +1,65 @@
+// Long Ping: React Native (>= 0.76, New Architecture) TurboModule library.
+//
+// The React Native Gradle plugin runs codegen from ../package.json ("codegenConfig":
+// LongPingSpec, javaPackageName com.longping) and adds the generated
+// com.longping.NativeLongPingSpec to the sources.
+
+buildscript {
+    ext.longPingExt = { String name, fallback ->
+        rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback
+    }
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        // React Native apps already put the Kotlin Gradle plugin on the root classpath; this only
+        // matters for hosts that don't, and resolves to the app's version when it is set.
+        // noinspection DifferentKotlinGradleVersion
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${longPingExt('kotlinVersion', '2.1.20')}"
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+apply plugin: "com.facebook.react"
+
+android {
+    namespace = "com.longping"
+    compileSdk = longPingExt("compileSdkVersion", 36)
+
+    defaultConfig {
+        minSdk = 24
+        targetSdk = longPingExt("targetSdkVersion", 36)
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    lint {
+        disable += "GradleCompatible"
+    }
+}
+
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    // Version comes from the app: the React Native Gradle plugin pins react-android for every project.
+    implementation "com.facebook.react:react-android"
+    implementation "com.google.android.gms:play-services-location:${longPingExt('googlePlayServicesLocationVersion', '21.3.0')}"
+    implementation "androidx.work:work-runtime:2.10.5"
+    implementation "androidx.core:core:1.13.1"
+}

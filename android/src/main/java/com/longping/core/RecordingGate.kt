@@ -1,0 +1,119 @@
+package com.longping.core
+
+enum class RecordEvent(val wire: String) {
+    INTERVAL("interval"),
+    MOTIONCHANGE("motionchange"),
+    CURRENT("current"),
+}
+
+/**
+ * DESIGN.md, "Recording rule": decides which OS fixes become records.
+ *
+ * - Interval: accurate fix and `fix.time - lastRecorded >= interval - tolerance`.
+ * - Overdue: more than interval + 30 s since the last record (or since tracking began) and only
+ *   inaccurate fixes arrived -> record the most accurate one seen, accuracy waived.
+ * - Motion change: the fix that changed the state is recorded immediately. A requested motion
+ *   change (start / changePace) records the next accurate fix, or after [MOTIONCHANGE_GRACE_MS]
+ *   the most accurate one seen.
+ * - Fix time more than [CLOCK_JUMP_MS] *before* the last record means the clock moved backwards
+ *   (wrong device time later corrected); the fix is recorded so tracking cannot go silent.
+ */
+class RecordingGate(lastRecordedTimeMs: Long? = null) {
+    sealed class Decision {
+        data class Record(val fix: Fix, val event: RecordEvent, val accuracyWaived: Boolean) : Decision()
+        data class Skip(val reason: SkipReason) : Decision()
+    }
+
+    enum class SkipReason { INACCURATE, TOO_SOON }
+
+    var lastRecordedTimeMs: Long? = lastRecordedTimeMs
+        private set
+
+    private var windowStartMs: Long? = null
+    private var pendingMotionChangeSinceMs: Long? = null
+    private var bestSinceRecord: Fix? = null
+
+    val isMotionChangePending: Boolean get() = pendingMotionChangeSinceMs != null
+
+    /** Tracking (re)started at [nowMs]: the overdue clock runs from here until the first record. */
+    fun beginWindow(nowMs: Long) {
+        windowStartMs = nowMs
+        bestSinceRecord = null
+    }
+
+    fun requestMotionChange(nowMs: Long) {
+        pendingMotionChangeSinceMs = nowMs
+        bestSinceRecord = null
+    }
+
+    fun cancelMotionChange() {
+        pendingMotionChangeSinceMs = null
+    }
+
+    fun offer(fix: Fix, nowMs: Long, intervalMs: Long, minAccuracyM: Double, motionChanged: Boolean = false): Decision {
+        val accurate = isAccurate(fix, minAccuracyM)
+        if (motionChanged) return record(fix, RecordEvent.MOTIONCHANGE, waived = !accurate)
+
+        val pendingSince = pendingMotionChangeSinceMs
+        if (pendingSince != null) {
+            if (accurate) return record(fix, RecordEvent.MOTIONCHANGE, waived = false)
+            val best = remember(fix)
+            return if (nowMs - pendingSince >= MOTIONCHANGE_GRACE_MS) {
+                record(best, RecordEvent.MOTIONCHANGE, waived = true)
+            } else {
+                Decision.Skip(SkipReason.INACCURATE)
+            }
+        }
+
+        if (!accurate) {
+            remember(fix)
+            return overdue(nowMs, intervalMs) ?: Decision.Skip(SkipReason.INACCURATE)
+        }
+
+        val last = lastRecordedTimeMs
+        val due = last == null ||
+            fix.timeMs - last >= intervalMs - Intervals.toleranceMs(intervalMs) ||
+            fix.timeMs < last - CLOCK_JUMP_MS
+        return if (due) record(fix, RecordEvent.INTERVAL, waived = false) else Decision.Skip(SkipReason.TOO_SOON)
+    }
+
+    /** Overdue check without a new fix (watchdog tick). */
+    fun checkOverdue(nowMs: Long, intervalMs: Long): Decision.Record? = overdue(nowMs, intervalMs)
+
+    private fun overdue(nowMs: Long, intervalMs: Long): Decision.Record? {
+        val best = bestSinceRecord ?: return null
+        val reference = lastRecordedTimeMs ?: windowStartMs ?: return null
+        if (nowMs - reference <= intervalMs + Intervals.OVERDUE_GRACE_MS) return null
+        return record(best, RecordEvent.INTERVAL, waived = true)
+    }
+
+    private fun remember(fix: Fix): Fix {
+        val best = bestSinceRecord
+        val winner = if (best == null || moreAccurate(fix, best)) fix else best
+        bestSinceRecord = winner
+        return winner
+    }
+
+    private fun record(fix: Fix, event: RecordEvent, waived: Boolean): Decision.Record {
+        lastRecordedTimeMs = fix.timeMs
+        bestSinceRecord = null
+        pendingMotionChangeSinceMs = null
+        return Decision.Record(fix, event, waived)
+    }
+
+    companion object {
+        const val MOTIONCHANGE_GRACE_MS = 30_000L
+        const val CLOCK_JUMP_MS = 10 * 60_000L
+
+        fun isAccurate(fix: Fix, minAccuracyM: Double): Boolean =
+            minAccuracyM == 0.0 || (fix.hasAccuracy && fix.accuracy <= minAccuracyM)
+
+        /** Known accuracy beats unknown; smaller beats larger; ties go to the newer fix. */
+        fun moreAccurate(candidate: Fix, current: Fix): Boolean = when {
+            !candidate.hasAccuracy -> false
+            !current.hasAccuracy -> true
+            candidate.accuracy != current.accuracy -> candidate.accuracy < current.accuracy
+            else -> candidate.timeMs >= current.timeMs
+        }
+    }
+}
