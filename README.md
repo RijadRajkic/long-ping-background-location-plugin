@@ -19,6 +19,8 @@ quiet for three hours" is not acceptable.
 
 Free and open source (MIT). No license key, no paid tier.
 
+**Docs and guides: [longping.nuredinkurtovic.info](https://longping.nuredinkurtovic.info)**
+
 Requires React Native 0.76+ (New Architecture), iOS 15.1+, Android 7.0+ (API 24).
 
 ## Install
